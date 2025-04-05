@@ -1,0 +1,86 @@
+name: Keep Active
+
+on:
+  schedule:
+    - cron: "0 0 */5 * *"  # 每15天运行一次
+  workflow_dispatch:
+
+env:
+  PAT: ${{ secrets.PAT }}  # 用于推送到 B 仓库
+  USER: ${{ secrets.USER }}
+  REPO: ${{ secrets.REPO }}  # B 仓库名
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout current repo (A 仓库)
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: true  # 使用默认的 GITHUB_TOKEN 推送到 A 仓库
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Python dependencies
+      run: |
+        pip install --upgrade pip
+        pip install jinja2 python-dotenv
+
+    - name: Check and clean A 仓库中的 webs/ 如果文件数超过 50
+      run: |
+        echo "🔍 检查 A 仓库 webs/ 目录文件数"
+        mkdir -p webs
+        FILE_COUNT=$(find webs -type f -not -path '*/\.*' | wc -l || echo 0)
+        echo "📊 当前 webs 文件数: $FILE_COUNT"
+        if [ "$FILE_COUNT" -gt 50 ]; then
+          echo "🧹 超过 50 个文件，清空 webs 目录"
+          rm -rf webs/*
+        else
+          echo "✅ 文件数不超过 5，无需清空"
+        fi
+
+    - name: Run bludweb.py to regenerate webs/ in A 仓库
+      run: python templates/bludweb.py webs 99
+      env:
+        PAT: ${{ secrets.PAT }}
+        USER: ${{ secrets.USER }}
+        REPO: ${{ secrets.REPO }}
+
+    - name: Commit and push webs/ changes back to A 仓库
+      run: |
+        echo "🚀 提交 webs/ 更新到 A 仓库"
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add webs
+        git commit -m "🔄 更新 A 仓库 webs/ 目录：$(date +'%F %T')" || echo "Nothing to commit"
+        git push origin HEAD:main  # 使用默认的 GITHUB_TOKEN 推送
+
+    - name: Clone target B 仓库
+      env:
+        TOKEN: ${{ secrets.PAT }}
+        USER: ${{ secrets.USER }}
+        REPO: ${{ secrets.REPO }}
+      run: |
+        echo "📥 克隆目标 B 仓库：${USER}/${REPO}"
+        git clone https://x-access-token:${TOKEN}@github.com/${USER}/${REPO}.git target-repo
+
+    - name: Copy webs/ to B 仓库
+      run: |
+        echo "🧩 拷贝 webs/ 到 B 仓库"
+        mkdir -p target-repo/webs
+        cp -r webs/* target-repo/webs/
+
+    - name: Commit and push to B 仓库
+      working-directory: target-repo
+      env:
+        TOKEN: ${{ secrets.PAT }}
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add webs
+        git commit -m "🚀 同步 webs/ 到 B 仓库：$(date +'%F %T')" || echo "Nothing to commit"
+        git push origin main  # 使用 PAT 推送到 B 仓库
